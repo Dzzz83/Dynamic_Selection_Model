@@ -154,21 +154,25 @@ def extract_features(model, dataset, device):
             all_feats.append(features.cpu())
     return torch.cat(all_feats, dim=0).numpy()
 
-def setup_logger(args):
+def setup_logger(args, exp_name):
     os.makedirs("results", exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    ratio_str = f"r{args.ratio}" if args.ratio is not None else "Baseline"
-    log_filename = f"results/train_{args.dataset}_{args.augmentation}_{ratio_str}_{timestamp}.log"
+    
+    # REMOVED timestamp so filenames are consistent for skipping
+    log_filename = f"results/{exp_name}.log"
+    
     logger = logging.getLogger("train_logger")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
+    
     fh = logging.FileHandler(log_filename)
     ch = logging.StreamHandler()
     formatter = logging.Formatter("%(asctime)s | %(message)s")
     fh.setFormatter(formatter)
     ch.setFormatter(formatter)
+    
     logger.addHandler(fh)
     logger.addHandler(ch)
+    
     return logger, log_filename
 
 # 3. Main Training Pipeline
@@ -176,10 +180,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="./data")
     parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--batch-size", type=int, default=128)
+    
+    # === OPTIMIZED DEFAULTS ===
+    parser.add_argument("--batch-size", type=int, default=128) # Safe for accuracy
+    parser.add_argument("--num-workers", type=int, default=16) # Fast loading
     parser.add_argument("--lr", type=float, default=0.001) 
     parser.add_argument("--device", default="cuda:1")
-    parser.add_argument("--num-workers", type=int, default=16)
+    # ==========================
     
     # Overrides
     parser.add_argument("--dataset", type=str, default=None)
@@ -191,7 +198,7 @@ def main():
     # Experiment Grid (32 models)
     datasets = ["cifar10","cifar100","imbalance_cifar10","imbalance_cifar100"] 
     augmentations = ["trivial", "weak"] 
-    select_ratios = [None, 0.5, 0.7, 0.9]
+    select_ratios = [None, 0.7, 0.8, 0.9]
 
     # Handle Overrides
     if args.dataset: datasets = [args.dataset]
@@ -211,8 +218,20 @@ def main():
                 args.augmentation = augmentation
                 args.ratio = select_ratio
                 
-                logger, logfile = setup_logger(args)
-                logger.info(f"STARTING EXP {exp_id}: {dataset_name} | {augmentation} | Ratio: {select_ratio}")
+                # 1. Create Unique Experiment Name
+                ratio_str = f"r{select_ratio}" if select_ratio is not None else "Baseline"
+                exp_name = f"train_{dataset_name}_{augmentation}_{ratio_str}"
+                
+                # 2. CHECK IF FINISHED (Skip Logic)
+                potential_log = f"results/{exp_name}.log"
+                if os.path.exists(potential_log):
+                    with open(potential_log, 'r') as f:
+                        if "Experiment Finished" in f.read():
+                            print(f"[SKIP] Experiment {exp_name} already completed.")
+                            continue
+
+                logger, logfile = setup_logger(args, exp_name)
+                logger.info(f"STARTING EXP {exp_id}: {exp_name}")
 
                 # define Transforms
                 mean, std = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)

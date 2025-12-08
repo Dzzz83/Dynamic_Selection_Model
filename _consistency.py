@@ -37,20 +37,17 @@ class ConsistencyCalculator:
         """Encodes images using a DataLoader to handle any dataset type."""
         all_features = []
         
-        # Create a loader that applies CLIP's preprocessing
-        # We assume the dataset returns (image, label)
-        # We need to override the transform to match CLIP's expectation
-        
         # Save original transform to restore later
         original_transform = getattr(dataset, 'transform', None)
         dataset.transform = self.preprocess 
 
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
         
         print(f"[CLIP] Encoding {len(dataset)} images...")
         
         with torch.no_grad():
-            for images, _ in loader:
+            # === FIXED: Added *rest to handle (image, label, index) ===
+            for images, *rest in loader:
                 images = images.to(self.device)
                 features = self.model.encode_image(images)
                 features = features / features.norm(dim=-1, keepdim=True)
@@ -100,7 +97,8 @@ class ConsistencyCalculator:
             # Fallback for datasets without .targets (iterating)
             labels = []
             loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-            for _, batch_labels in loader:
+            # === FIXED: Added *rest here as well ===
+            for _, batch_labels, *rest in loader:
                 labels.extend(batch_labels.tolist())
         
         # 3. Encode Texts
