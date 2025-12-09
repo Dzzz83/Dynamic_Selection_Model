@@ -48,54 +48,16 @@ class ResNet18_CIFAR(nn.Module):
             return features, logits
         return logits
 
-# === HELPER TO HANDLE VARIABLE TUPLE SIZES ===
-def unpack_batch(batch, device):
-    """
-    Automatically identifies Inputs (4D) and Targets (Labels).
-    Handles cases: 
-    1. (Image, Label)
-    2. (Image, Label, Index)
-    3. (Index, Image, Label)
-    """
-    inputs, targets = None, None
-    
-    # 1. Move everything to device first
-    batch = [b.to(device, non_blocking=True) for b in batch]
-
-    # 2. Find the Image (4D Tensor)
-    for item in batch:
-        if item.dim() == 4:
-            inputs = item
-            break
-            
-    # 3. Find the Target
-    # If 3 items, and 1st is Index (1D), then 2nd is Image (4D), 3rd is Target (1D)
-    if len(batch) == 3:
-        if batch[0].dim() == 1 and batch[1].dim() == 4:
-            # Case: (Index, Image, Label)
-            targets = batch[2]
-        else:
-            # Case: (Image, Label, Index) -> Standard
-            targets = batch[1]
-    elif len(batch) == 2:
-        # Case: (Image, Label)
-        targets = batch[1]
-    
-    if inputs is None:
-        raise ValueError(f"Could not find 4D Image Tensor in batch of shapes: {[b.shape for b in batch]}")
-        
-    return inputs, targets
-
-
 def validate(model, loader, device, criterion):
     model.eval()
     running_loss = 0.0
     correct = 0
     total = 0
     with torch.no_grad():
-        for batch in loader:
-            # Smart Unpacking
-            inputs, targets = unpack_batch(batch, device)
+        # CLEAN: Use *rest to ignore indices if they exist
+        for inputs, targets, *rest in loader:
+            inputs = inputs.to(device, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
 
             outputs = model(inputs)
             loss = criterion(outputs, targets)
@@ -111,9 +73,10 @@ def train_one_epoch(model, loader, optimizer, device, criterion, scaler):
     correct = 0
     total = 0
     
-    for batch in loader:
-        # Smart Unpacking
-        inputs, targets = unpack_batch(batch, device)
+    # CLEAN: Use *rest to ignore indices if they exist
+    for inputs, targets, *rest in loader:
+        inputs = inputs.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
 
         optimizer.zero_grad()
         with torch.amp.autocast('cuda', enabled=(device.type=="cuda")):
@@ -141,15 +104,9 @@ def extract_features(model, dataset, device):
     loader = torch.utils.data.DataLoader(dataset, batch_size=256, shuffle=False, num_workers=4)
     all_feats = []
     with torch.no_grad():
-        for batch in loader:
-            # Manual unpacking for features (we only need the image)
-            batch = [b.to(device) for b in batch]
-            inputs = None
-            for item in batch:
-                if item.dim() == 4:
-                    inputs = item
-                    break
-            
+        # CLEAN: We only need inputs, ignore everything else
+        for inputs, *rest in loader:
+            inputs = inputs.to(device)
             features, _ = model(inputs, return_features=True)
             all_feats.append(features.cpu())
     return torch.cat(all_feats, dim=0).numpy()
@@ -157,7 +114,7 @@ def extract_features(model, dataset, device):
 def setup_logger(args, exp_name):
     os.makedirs("results", exist_ok=True)
     
-    # REMOVED timestamp so filenames are consistent for skipping
+    # Filename matches exp_name for easy skipping
     log_filename = f"results/{exp_name}.log"
     
     logger = logging.getLogger("train_logger")
@@ -182,8 +139,8 @@ def main():
     parser.add_argument("--epochs", type=int, default=200)
     
     # === OPTIMIZED DEFAULTS ===
-    parser.add_argument("--batch-size", type=int, default=128) # Safe for accuracy
-    parser.add_argument("--num-workers", type=int, default=16) # Fast loading
+    parser.add_argument("--batch-size", type=int, default=128) 
+    parser.add_argument("--num-workers", type=int, default=16) 
     parser.add_argument("--lr", type=float, default=0.001) 
     parser.add_argument("--device", default="cuda:1")
     # ==========================

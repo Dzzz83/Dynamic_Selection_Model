@@ -24,7 +24,7 @@ class cifar10_dataset(torchvision.datasets.CIFAR10):
         if self.transform is not None:
             image = self.transform(image)
 
-        return idx, image, label
+        return image, label, idx # change order
 if __name__ == '__main__':
     import pdb
     pdb.set_trace()
@@ -36,7 +36,7 @@ if __name__ == '__main__':
                                train=True,
                                download=True,
                                transform=transform)
-    trainloader = iter(trainset)
+    trainloader = iter(trainset)    
     data, label = next(trainloader)
     print(data.shape)   # MUST be [3, 32, 32]
     print(type(data))   # torch.Tensor
