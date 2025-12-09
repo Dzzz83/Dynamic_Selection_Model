@@ -47,11 +47,17 @@ def extract_features(model, dataset, device="cuda", batch_size=256, layer_name="
     dummy_features_list = [] # Used only if hook fails
     
     with torch.no_grad():
-        for images, _ in loader:
+        # --- FIX STARTS HERE ---
+        # Old: for images, _ in loader:  <-- CRASHES with 3 items
+        # New: Robust way to grab just the image
+        for batch in loader:
+            images = batch[0] 
+            
             images = images.to(device)
             output = model(images)
             if hook_handle is None:
                 dummy_features_list.append(output.cpu())
+        # --- FIX ENDS HERE ---
 
     # 4. Clean up
     if hook_handle:

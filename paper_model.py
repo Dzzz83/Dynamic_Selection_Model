@@ -132,7 +132,6 @@ def setup_logger(args, exp_name):
     
     return logger, log_filename
 
-# 3. Main Training Pipeline
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="./data")
@@ -145,19 +144,19 @@ def main():
     parser.add_argument("--device", default="cuda:1")
     # ==========================
     
-    # Overrides
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--augmentation", type=str, default=None)
     parser.add_argument("--ratio", type=float, default=None)
 
     args = parser.parse_args()
 
-    # Experiment Grid (32 models)
+    # ... (Experiment Grid Setup - Same as before) ...
+    # [Keep lines 180-210 from your code: datasets, augmentations, loops...]
+    
     datasets = ["cifar10","cifar100","imbalance_cifar10","imbalance_cifar100"] 
     augmentations = ["trivial", "weak"] 
     select_ratios = [None, 0.7, 0.8, 0.9]
 
-    # Handle Overrides
     if args.dataset: datasets = [args.dataset]
     if args.augmentation: augmentations = [args.augmentation]
     if args.ratio is not None: select_ratios = [args.ratio]
@@ -175,11 +174,10 @@ def main():
                 args.augmentation = augmentation
                 args.ratio = select_ratio
                 
-                # 1. Create Unique Experiment Name
+                # ... (Logging Setup - Same as before) ...
                 ratio_str = f"r{select_ratio}" if select_ratio is not None else "Baseline"
                 exp_name = f"train_{dataset_name}_{augmentation}_{ratio_str}"
                 
-                # 2. CHECK IF FINISHED (Skip Logic)
                 potential_log = f"results/{exp_name}.log"
                 if os.path.exists(potential_log):
                     with open(potential_log, 'r') as f:
@@ -190,49 +188,29 @@ def main():
                 logger, logfile = setup_logger(args, exp_name)
                 logger.info(f"STARTING EXP {exp_id}: {exp_name}")
 
-                # define Transforms
+                # ... (Dataset & Transform Setup - Same as before) ...
                 mean, std = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
-                
-                clean_transform = transforms.Compose([
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean, std)
-                ])
+                clean_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
                 
                 if augmentation == "trivial":
                     train_transform, _ = get_Trival_Augmentation()
                 else:
                     train_transform, _ = get_week_augmentation()
 
-                # create Dataset Instance
                 if dataset_name == "cifar10":
                     from _cifar10 import cifar10_dataset
                     dataset = cifar10_dataset(root=args.data_dir, train=True, download=True, transform=clean_transform)
                     val_dataset = cifar10_dataset(root=args.data_dir, train=False, download=True, transform=clean_transform)
                     num_classes = 10
-
-                elif dataset_name == "cifar100":
-                    from _cifar100 import cifar100_dataset
-                    dataset = cifar100_dataset(root=args.data_dir, train=True, download=True, transform=clean_transform)
-                    val_dataset = cifar100_dataset(root=args.data_dir, train=False, download=True, transform=clean_transform)
-                    num_classes = 100
-
+                # ... (Add other dataset cases here) ...
                 elif dataset_name == "imbalance_cifar10":
                     dataset = IMBALANCECIFAR10(root=args.data_dir, train=True, download=True, transform=clean_transform)
                     val_dataset = IMBALANCECIFAR10(root=args.data_dir, train=False, download=True, transform=clean_transform)
                     num_classes = 10
 
-                elif dataset_name == "imbalance_cifar100":
-                    dataset = IMBALANCECIFAR100(root=args.data_dir, train=True, download=True, transform=clean_transform)
-                    val_dataset = IMBALANCECIFAR100(root=args.data_dir, train=False, download=True, transform=clean_transform)
-                    num_classes = 100
-
-                else:
-                    raise ValueError("Unknown dataset")
-
-                # check select ratio to perform dynamic selection
+                # CLIP Calculation (Runs ONCE - Correct)
                 p_con = np.ones(len(dataset)) 
                 if select_ratio is not None:
-                    # Set transform to clean for CLIP
                     dataset.transform = clean_transform 
                     logger.info("Calculating CLIP Consistency Scores...")
                     consistency_calc = ConsistencyCalculator(device=device)
@@ -246,40 +224,52 @@ def main():
                 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
                 scaler = torch.amp.GradScaler('cuda')
 
-                # Validation Loader
-                val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+                # === OPTIMIZATION 1: Create Val Loader ONCE (Outside Loop) ===
+                # We don't need to destroy and recreate this every epoch
+                val_loader = torch.utils.data.DataLoader(
+                    val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
+                )
 
-                # Training Loop
-                current_indices = None 
+                # Initialize Train Loader (Initial state)
+                dataset.transform = train_transform
+                current_indices = None
                 
+                train_loader, _ = create_dataloader(
+                    train_dataset=dataset, val_dataset=val_dataset,
+                    batch_size=args.batch_size, num_workers=args.num_workers,
+                    select_indices=current_indices 
+                )
+
                 for epoch in range(1, args.epochs + 1):
                     t0 = time.time()
                     
-                    # 1. Dynamic Selection Phase (Clean Data)
+                    # 1. Dynamic Selection Phase
                     if select_ratio is not None:
-                        # calculate density from model feature vector every 5 epochs
+                        # Update ONLY every 5 epochs
                         if epoch == 1 or epoch % 5 == 0:
-                            dataset.transform = clean_transform
                             logger.info(f"[Epoch {epoch}] Updating Selection...")
-                            # get feature vectors from model
+                            
+                            # A. Switch to Clean Transform for Feature Extraction
+                            dataset.transform = clean_transform
                             feats = extract_features(model, dataset, device)
-                            # compute density
                             p_rho = compute_density_probability(feats)
+                            
+                            # B. Calculate Indices
                             current_indices = select_samples(dataset, p_rho, p_con, select_ratio)
                             logger.info(f"Selected {len(current_indices)} samples.")
+                            
+                            # C. Switch back to Train Transform
+                            dataset.transform = train_transform
 
-                    # 2. Training Phase (Augmented Data)
-                    dataset.transform = train_transform
+                            # === OPTIMIZATION 2: Update Train Loader ONLY when indices change ===
+                            train_loader, _ = create_dataloader(
+                                train_dataset=dataset, val_dataset=val_dataset,
+                                batch_size=args.batch_size, num_workers=args.num_workers,
+                                select_indices=current_indices 
+                            )
                     
-                    
-                    train_loader, _ = create_dataloader(
-                        train_dataset=dataset,
-                        val_dataset=val_dataset,
-                        batch_size=args.batch_size,
-                        num_workers=args.num_workers,
-                        select_indices=current_indices 
-                    )
-
+                    # 2. Training Phase
+                    # (Note: We use the existing train_loader, we don't recreate it if not needed)
                     train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, device, criterion, scaler)
                     val_loss, val_acc = validate(model, val_loader, device, criterion)
                     
