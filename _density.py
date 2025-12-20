@@ -70,7 +70,7 @@ def extract_features(model, dataset, device="cuda", batch_size=256, layer_name="
     return features
 
 
-def compute_density_probability(features: np.ndarray, k: int = 20) -> np.ndarray:
+def compute_density_probability(features: np.ndarray, k: int = 50) -> np.ndarray:
     """
     Calculates Density probability based on k-Nearest Neighbors distance.
     Formula: Higher Distance = Rare Sample = High Probability (to keep)
