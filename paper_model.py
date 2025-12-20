@@ -208,6 +208,12 @@ def main():
                     val_dataset = IMBALANCECIFAR10(root=args.data_dir, train=False, download=True, transform=clean_transform)
                     num_classes = 10
 
+                # === ADD THIS BLOCK ===
+                elif dataset_name == "imbalance_cifar100":
+                    dataset = IMBALANCECIFAR100(root=args.data_dir, train=True, download=True, transform=clean_transform)
+                    val_dataset = IMBALANCECIFAR100(root=args.data_dir, train=False, download=True, transform=clean_transform)
+                    num_classes = 100
+
                 # CLIP Calculation (Runs ONCE - Correct)
                 p_con = np.ones(len(dataset)) 
                 if select_ratio is not None:
