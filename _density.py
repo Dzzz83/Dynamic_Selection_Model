@@ -4,6 +4,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from sklearn.neighbors import NearestNeighbors
 
+from selection import get_targets_safe
+
 def select_samples(dataset, p_rho, p_con, selection_ratio=0.5):
     """
     Combines probabilities and selects the top samples per class.
