@@ -67,8 +67,6 @@ def load_data_corrupted(corrupt_type='shuffle', dataname=None, data=None, valid_
     
     
     
-# Get list of all indices of a dataset (subset)
-# We use a train loader here
 def get_indices(singleloader):
     # Check if the sampler has 'indices' (like SubsetRandomSampler)
     if hasattr(singleloader.batch_sampler.sampler, 'indices'):
@@ -77,8 +75,8 @@ def get_indices(singleloader):
     else:
         indices = list(range(len(singleloader.dataset)))
         
-    # === THE FIX IS HERE ===
-    # Convert the list to a torch.Tensor before returning it
+    # === CRITICAL FIX: Convert to Tensor ===
+    # The OTDD library crashes if it gets a list. We must give it a Tensor.
     return torch.tensor(indices).long()
 
 # We will use a pretrained feature extractor from 'checkpoint' folder
