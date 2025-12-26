@@ -88,8 +88,29 @@ def load_pretrained_feature_extractor(feature_extractor_name, device):
     return net_test
     
     
-# Get dual solution of OT problem
 def get_OT_dual_sol(feature_extractor, trainloader, testloader, training_size=10000, p=2, resize=32, device='cuda'):
+    # =========================================================================
+    # === FIX: Ensure targets are Tensors to prevent OTDD Library Crash ===
+    # The library tries to index targets using a Tensor, which fails if targets are NumPy.
+    # We force targets to be Tensors here.
+    # =========================================================================
+    def to_tensor_targets(dataset):
+        # Handle Subsets (recurse to the underlying dataset)
+        if hasattr(dataset, 'dataset'):
+            to_tensor_targets(dataset.dataset)
+        
+        # Convert targets if they exist
+        if hasattr(dataset, 'targets'):
+            if isinstance(dataset.targets, np.ndarray):
+                dataset.targets = torch.from_numpy(dataset.targets)
+            elif isinstance(dataset.targets, list):
+                dataset.targets = torch.tensor(dataset.targets)
+
+    # Apply fix to both loaders
+    to_tensor_targets(trainloader.dataset)
+    to_tensor_targets(testloader.dataset)
+    # =========================================================================
+
     embedder = feature_extractor.to(device)
     embedder.fc = torch.nn.Identity()
     for p in embedder.parameters():
@@ -113,8 +134,6 @@ def get_OT_dual_sol(feature_extractor, trainloader, testloader, training_size=10
                            precision='single',
                            p = 2, entreg = 1e-1,
                            device='cuda')
-
-
 
     tic = time.perf_counter()
     dual_sol = dist.dual_sol(maxsamples = training_size, return_coupling = True)
