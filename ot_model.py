@@ -4,6 +4,7 @@ import os
 import logging
 from datetime import datetime
 import numpy as np
+import lava
 
 import torch
 import torch.nn as nn
@@ -132,6 +133,36 @@ def setup_logger(args, exp_name):
     
     return logger, log_filename
 
+def run_lava_selection(model, train_dataset, val_dataset):
+    """
+    Runs LAVA Optimal Transport to calculate the value of each training sample.
+    """
+   
+    train_loader_lava = torch.utils.data.DataLoader(
+        train_dataset, batch_size=128, shuffle=False, num_workers=2
+    )
+    val_loader_lava = torch.utils.data.DataLoader(
+        val_dataset, batch_size=128, shuffle=False, num_workers=2
+    )
+    
+    loaders = {'train': train_loader_lava, 'test': val_loader_lava}
+    
+
+    shuffle_ind = [] 
+    
+    print(">>> [LAVA] Computing Transport Cost (This may take a moment)...")
+ 
+    dual_sol, _ = lava.compute_dual(
+        model, 
+        loaders['train'], 
+        loaders['test'], 
+        len(train_dataset), 
+        shuffle_ind, 
+        resize=32
+    )
+    
+    return dual_sol
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="./data")
@@ -210,16 +241,6 @@ def main():
                     val_dataset = IMBALANCECIFAR100(root=args.data_dir, train=False, download=True, transform=clean_transform)
                     num_classes = 100
 
-                # CLIP Calculation
-                p_con = np.ones(len(dataset)) 
-                if select_ratio is not None:
-                    dataset.transform = clean_transform 
-                    logger.info("Calculating CLIP Consistency Scores...")
-                    consistency_calc = ConsistencyCalculator(device=device)
-                    p_con = consistency_calc.calculate(dataset)
-                    del consistency_calc
-                    torch.cuda.empty_cache()
-
                 model = ResNet18_CIFAR(num_classes=num_classes).to(device)
                 optimizer = optim.Adam(model.parameters(), lr=args.lr)
                 criterion = nn.CrossEntropyLoss()
@@ -244,47 +265,43 @@ def main():
                 for epoch in range(1, args.epochs + 1):
                     t0 = time.time()
                     
-                    # 1. Dynamic Selection Phase
-                    if select_ratio is not None:
-                        # Update ONLY every 5 epochs (or first epoch)
-                        if epoch == 1 or epoch % 5 == 0:
-                            logger.info(f"[Epoch {epoch}] Updating Selection...")
-                            
-                            # A. Switch to Clean Transform for Feature Extraction
-                            dataset.transform = clean_transform
-                            feats = extract_features(model, dataset, device)
-                            p_rho = compute_density_probability(feats)
-                            
-                            # === NEW CODE START: Calculate Adaptive Ratios ===
-                            logger.info("Calculating Adaptive Selection Ratios...")
-                            
-                            # 1. Get targets to count classes
-                            all_targets = get_targets_safe(dataset)
-                            
-                            # 2. Compute ratios 
-                            # base_ratio = args.ratio (e.g. 0.7 for Majority)
-                            # max_ratio = 1.0 (Keep 100% of Minority)
-                            adaptive_ratios = get_class_adaptive_ratios(
-                                all_targets, 
-                                base_ratio=select_ratio, 
-                                max_ratio=1.0
-                            )
-                            if epoch == 1:
-                                logger.info(f"VERIFY RATIOS: Class 0 (Head): {adaptive_ratios.get(0)} | Class 9 (Tail): {adaptive_ratios.get(9)}")
-                                
-                            current_indices = select_samples(dataset, p_rho, p_con, adaptive_ratios)
-                            
-                            logger.info(f"Selected {len(current_indices)} samples.")
-                            
-                            # C. Switch back to Train Transform
-                            dataset.transform = train_transform
+                # 1. Dynamic Selection Phase
+                if select_ratio is not None:
+                    # Update selection every 5 epochs (LAVA is slow, don't run every epoch)
+                    if epoch == 1 or epoch % 5 == 0:
+                        logger.info(f"[Epoch {epoch}] Updating Selection with LAVA...")
+                        
+                        # A. Switch to Clean Transform (Standard for evaluation/feature extraction)
+                        dataset.transform = clean_transform
+                        
+                        # B. Calculate LAVA Scores
+                        # dual_sol[i] = Value of image i. (Higher is usually better/more relevant)
+                        lava_scores = run_lava_selection(model, dataset, val_dataset)
+                        
+                        # C. Select Top Samples
+                        # We select the top 'args.ratio' percent of samples with the highest scores.
+                        num_total = len(lava_scores)
+                        num_keep = int(num_total * args.ratio)
+                        
+                        # Sort indices: High Score -> Low Score
+                        # argsort gives indices of sorted elements. 
+                        # [::-1] reverses it to be Descending (Best to Worst)
+                        sorted_indices = np.argsort(lava_scores)[::-1]
+                        
+                        # Keep the top N
+                        current_indices = sorted_indices[:num_keep]
+                        
+                        logger.info(f"[LAVA] Selected {len(current_indices)} / {num_total} samples.")
+                        
+                        # D. Switch back to Train Transform
+                        dataset.transform = train_transform
 
-                            # Update Train Loader
-                            train_loader, _ = create_dataloader(
-                                train_dataset=dataset, val_dataset=val_dataset,
-                                batch_size=args.batch_size, num_workers=args.num_workers,
-                                select_indices=current_indices 
-                            )
+                        # Update Train Loader with the new LAVA indices
+                        train_loader, _ = create_dataloader(
+                            train_dataset=dataset, val_dataset=val_dataset,
+                            batch_size=args.batch_size, num_workers=args.num_workers,
+                            select_indices=current_indices 
+                        )
                     
                     # 2. Training Phase
                     # (Note: We use the existing train_loader, we don't recreate it if not needed)
