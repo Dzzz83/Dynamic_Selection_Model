@@ -91,24 +91,21 @@ def load_pretrained_feature_extractor(feature_extractor_name, device):
 def get_OT_dual_sol(feature_extractor, trainloader, testloader, training_size=10000, p=2, resize=32, device='cuda'):
     # =========================================================================
     # === FIX: Ensure targets are Tensors to prevent OTDD Library Crash ===
-    # The library tries to index targets using a Tensor, which fails if targets are NumPy.
-    # We force targets to be Tensors here.
     # =========================================================================
-    def to_tensor_targets(dataset):
-        # Handle Subsets (recurse to the underlying dataset)
+    def enforce_tensor_targets(dataset):
+        # If this is a Subset, recurse down to the original dataset
         if hasattr(dataset, 'dataset'):
-            to_tensor_targets(dataset.dataset)
+            enforce_tensor_targets(dataset.dataset)
         
-        # Convert targets if they exist
+        # If targets exist, convert them to Tensors
         if hasattr(dataset, 'targets'):
-            if isinstance(dataset.targets, np.ndarray):
-                dataset.targets = torch.from_numpy(dataset.targets)
-            elif isinstance(dataset.targets, list):
-                dataset.targets = torch.tensor(dataset.targets)
+            if not torch.is_tensor(dataset.targets):
+                # Convert list or numpy array to torch Tensor
+                dataset.targets = torch.as_tensor(dataset.targets)
 
-    # Apply fix to both loaders
-    to_tensor_targets(trainloader.dataset)
-    to_tensor_targets(testloader.dataset)
+    # Apply the fix to both datasets immediately
+    enforce_tensor_targets(trainloader.dataset)
+    enforce_tensor_targets(testloader.dataset)
     # =========================================================================
 
     embedder = feature_extractor.to(device)
@@ -116,7 +113,7 @@ def get_OT_dual_sol(feature_extractor, trainloader, testloader, training_size=10
     for p in embedder.parameters():
         p.requires_grad = False
 
-    # Here we use same embedder for both datasets
+    # Define feature cost
     feature_cost = FeatureCost(src_embedding = embedder,
                                src_dim = (3,resize,resize),
                                tgt_embedding = embedder,
@@ -124,6 +121,7 @@ def get_OT_dual_sol(feature_extractor, trainloader, testloader, training_size=10
                                p = 2,
                                device='cuda')
 
+    # Compute distance
     dist = DatasetDistance(trainloader, testloader,
                            inner_ot_method = 'exact',
                            debiased_loss = True,
@@ -145,12 +143,15 @@ def get_OT_dual_sol(feature_extractor, trainloader, testloader, training_size=10
         dual_sol[i] = dual_sol[i].to('cpu')
     return dual_sol
     
-# Get the calibrated gradient of the dual solution
-# Which can be considered as data values (more in paper...)
 def values(dual_sol, training_size):
     dualsol = dual_sol
     
-    f1k = np.array(dual_sol[0].squeeze())
+    # FORCE FLATTEN: .flatten() ensures we get a 1D array of scalars
+    # We also detach() to ensure no graph is carried over if it's a tensor
+    if torch.is_tensor(dual_sol[0]):
+        f1k = dual_sol[0].cpu().detach().numpy().flatten()
+    else:
+        f1k = np.array(dual_sol[0]).flatten()
 
     trainGradient = [0]*training_size
     trainGradient = (1+1/(training_size-1))*f1k - sum(f1k)/(training_size-1)
