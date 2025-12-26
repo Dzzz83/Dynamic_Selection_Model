@@ -33,10 +33,10 @@ def get_targets_safe(dataset):
 def select_samples(dataset, p_rho, p_con, selection_ratio=0.5):
     """
     Combines probabilities and selects the top samples per class.
+    Handles both static float ratios and class-wise dictionary ratios.
     """
     # 1. Formula 3: Joint Distribution
     if len(p_rho) != len(p_con):
-        # Allow broadcasting if one is scalar, otherwise error
         pass 
 
     p_rho = np.array(p_rho)
@@ -54,8 +54,18 @@ def select_samples(dataset, p_rho, p_con, selection_ratio=0.5):
         class_idxs = np.where(targets == c)[0]
         class_scores = p_sel[class_idxs]
         
+        # --- FIX: Handle Dictionary vs Float Ratio ---
+        if isinstance(selection_ratio, dict):
+            # Look up the specific ratio for this class 'c'
+            # Fallback to 0.5 if class key is missing for safety
+            r = selection_ratio.get(c, 0.5)
+        else:
+            # Use the static float value
+            r = selection_ratio
+        # ---------------------------------------------
+        
         # Calculate k (number of samples to keep)
-        k = max(1, int(len(class_idxs) * selection_ratio))
+        k = max(1, int(len(class_idxs) * r))
         
         # Sort descending (Best scores first)
         local_sorted_args = np.argsort(-class_scores) 
