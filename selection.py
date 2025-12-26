@@ -67,3 +67,42 @@ def select_samples(dataset, p_rho, p_con, selection_ratio=0.5):
 
     print(f"[Selection] Selected {len(selected_indices)} / {len(dataset)} samples.")
     return selected_indices
+
+def get_class_adaptive_ratios(labels, base_ratio=0.7, max_ratio=1.0):
+    """
+    Calculates a dynamic selection ratio for each class based on sample count.
+    
+    Args:
+        labels (torch.Tensor or list): The full list/tensor of training labels.
+        base_ratio (float): The ratio for the majority class (e.g., 0.7).
+        max_ratio (float): The ratio for the minority class (e.g., 1.0).
+        
+    Returns:
+        dict: A dictionary mapping {class_index: selection_ratio}
+    """
+    # 1. Count samples per class
+    if isinstance(labels, torch.Tensor):
+        labels = labels.cpu().numpy()
+        
+    classes, counts = np.unique(labels, return_counts=True)
+    n_max = np.max(counts) # Count of majority class
+    n_min = np.min(counts) # Count of minority class
+    
+    # Safety check for perfectly balanced data
+    if n_max == n_min:
+        return {c: base_ratio for c in classes}
+
+    ratios = {}
+    for cls, count in zip(classes, counts):
+        # Linear Interpolation Formula:
+        # If count is high (close to n_max) -> Ratio is low (base_ratio)
+        # If count is low (close to n_min)  -> Ratio is high (max_ratio)
+        
+        # Calculate how "minority" this class is (0.0 = Majority, 1.0 = Minority)
+        minority_factor = (n_max - count) / (n_max - n_min)
+        
+        # Scale the ratio
+        r = base_ratio + (max_ratio - base_ratio) * minority_factor
+        ratios[cls] = round(r, 4)
+        
+    return ratios

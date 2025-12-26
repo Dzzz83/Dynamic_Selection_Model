@@ -4,6 +4,51 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from sklearn.neighbors import NearestNeighbors
 
+def select_samples(dataset, p_rho, p_con, selection_ratio=0.5):
+    """
+    Combines probabilities and selects the top samples per class.
+    Supports both fixed ratio (float) and adaptive ratio (dict).
+    """
+    # 1. Formula 3: Joint Distribution
+    p_rho = np.array(p_rho)
+    p_con = np.array(p_con)
+    p_sel = p_rho * p_con
+    
+    # 2. Safe Target Extraction
+    targets = get_targets_safe(dataset)
+    
+    # 3. Per-Class Selection
+    classes = np.unique(targets)
+    selected_indices = []
+
+    for c in classes:
+        class_idxs = np.where(targets == c)[0]
+        class_scores = p_sel[class_idxs]
+        
+        # === UPDATE START: Handle Adaptive Ratios ===
+        # If selection_ratio is a dict, look up the specific ratio for this class 'c'
+        # If it's a float, use it directly for all classes
+        if isinstance(selection_ratio, dict):
+            # Default to 1.0 if class not found, for safety
+            current_ratio = selection_ratio.get(c, 1.0) 
+        else:
+            current_ratio = selection_ratio
+        # === UPDATE END ===
+
+        # Calculate k (number of samples to keep)
+        k = max(1, int(len(class_idxs) * current_ratio))
+        
+        # Sort descending (Best scores first)
+        local_sorted_args = np.argsort(-class_scores) 
+        keep_local = local_sorted_args[:k]
+        
+        # Map back to global indices
+        keep_global = class_idxs[keep_local]
+        selected_indices.extend(keep_global.tolist())
+
+    print(f"[Selection] Selected {len(selected_indices)} / {len(dataset)} samples.")
+    return selected_indices
+
 def extract_features(model, dataset, device="cuda", batch_size=256, layer_name="avgpool"):
     """
     Extracts features from the dataset.

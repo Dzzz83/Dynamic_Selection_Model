@@ -24,8 +24,7 @@ class ConsistencyCalculator:
         original_transform = getattr(dataset, 'transform', None)
         dataset.transform = self.preprocess 
 
-        # Use 8 workers for speed
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
         
         all_features = []
         print(f"[CLIP] Encoding {len(dataset)} images...")

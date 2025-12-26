@@ -14,7 +14,7 @@ import torchvision.models as models
 from dataloader import create_dataloader 
 from _density import compute_density_probability
 from _consistency import ConsistencyCalculator
-from selection import select_samples
+from selection import select_samples, get_class_adaptive_ratios, get_targets_safe
 from _imbalance_cifar import IMBALANCECIFAR10, IMBALANCECIFAR100
 from _augmentation import get_Trival_Augmentation, get_week_augmentation
 
@@ -246,12 +246,13 @@ def main():
                     select_indices=current_indices 
                 )
 
+
                 for epoch in range(1, args.epochs + 1):
                     t0 = time.time()
                     
                     # 1. Dynamic Selection Phase
                     if select_ratio is not None:
-                        # Update ONLY every 5 epochs
+                        # Update ONLY every 5 epochs (or first epoch)
                         if epoch == 1 or epoch % 5 == 0:
                             logger.info(f"[Epoch {epoch}] Updating Selection...")
                             
@@ -260,14 +261,31 @@ def main():
                             feats = extract_features(model, dataset, device)
                             p_rho = compute_density_probability(feats)
                             
-                            # B. Calculate Indices
-                            current_indices = select_samples(dataset, p_rho, p_con, select_ratio)
+                            # === NEW CODE START: Calculate Adaptive Ratios ===
+                            logger.info("Calculating Adaptive Selection Ratios...")
+                            
+                            # 1. Get targets to count classes
+                            all_targets = get_targets_safe(dataset)
+                            
+                            # 2. Compute ratios 
+                            # base_ratio = args.ratio (e.g. 0.7 for Majority)
+                            # max_ratio = 1.0 (Keep 100% of Minority)
+                            adaptive_ratios = get_class_adaptive_ratios(
+                                all_targets, 
+                                base_ratio=select_ratio, 
+                                max_ratio=1.0
+                            )
+                            if epoch == 1:
+                                logger.info(f"VERIFY RATIOS: Class 0 (Head): {adaptive_ratios.get(0)} | Class 9 (Tail): {adaptive_ratios.get(9)}")
+                                
+                            current_indices = select_samples(dataset, p_rho, p_con, adaptive_ratios)
+                            
                             logger.info(f"Selected {len(current_indices)} samples.")
                             
                             # C. Switch back to Train Transform
                             dataset.transform = train_transform
 
-                            # === OPTIMIZATION 2: Update Train Loader ONLY when indices change ===
+                            # Update Train Loader
                             train_loader, _ = create_dataloader(
                                 train_dataset=dataset, val_dataset=val_dataset,
                                 batch_size=args.batch_size, num_workers=args.num_workers,
