@@ -70,14 +70,17 @@ def load_data_corrupted(corrupt_type='shuffle', dataname=None, data=None, valid_
 # Get list of all indices of a dataset (subset)
 # We use a train loader here
 def get_indices(singleloader):
-    # return singleloader.batch_sampler.sampler.indices
     # Check if the sampler has 'indices' (like SubsetRandomSampler)
     if hasattr(singleloader.batch_sampler.sampler, 'indices'):
-        return singleloader.batch_sampler.sampler.indices
-    # If not (like SequentialSampler), just return the list 0, 1, 2...
+        indices = singleloader.batch_sampler.sampler.indices
+    # If not (like SequentialSampler), just create the list 0, 1, 2...
     else:
-        return list(range(len(singleloader.dataset)))
-    
+        indices = list(range(len(singleloader.dataset)))
+        
+    # === THE FIX IS HERE ===
+    # Convert the list to a torch.Tensor before returning it
+    return torch.tensor(indices).long()
+
 # We will use a pretrained feature extractor from 'checkpoint' folder
 def load_pretrained_feature_extractor(feature_extractor_name, device):
     net_test = PreActResNet18()
