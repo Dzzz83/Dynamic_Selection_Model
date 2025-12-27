@@ -271,87 +271,41 @@ def main():
                     if epoch == 1 or epoch % 5 == 0:
                         logger.info(f"[Epoch {epoch}] Updating Selection with LAVA...")
                         
-                        # A. Switch to Clean Transform (Standard for evaluation/feature extraction)
+                        # A. Calculate how many samples to keep
+                        num_total = len(dataset)
+                        num_keep = int(num_total * select_ratio)
+
+                        # B. Switch to Clean Transform (Standard for evaluation/feature extraction)
                         dataset.transform = clean_transform
                         
-                        # B. Calculate LAVA Scores
-                        # dual_sol[i] = Value of image i. (Higher is usually better/more relevant)
+                        # [LAVA] Computing Transport Cost
                         lava_scores = run_lava_selection(model, dataset, val_dataset)
-                        
-                        # C. Select Top Samples
-                        # We select the top 'args.ratio' percent of samples with the highest scores.
-                        num_total = len(lava_scores)
-                        num_keep = int(num_total * args.ratio)
-                        
-                        # --- DEBUG START ---
-                        print("\n" + "="*30)
-                        print("DEBUG: Inspecting lava_scores before crash")
-                        print(f"1. Type: {type(lava_scores)}")
 
-                        if lava_scores is None:
-                            print("ERROR: lava_scores is None!")
-                        elif isinstance(lava_scores, list):
-                            print(f"2. It is a list of length: {len(lava_scores)}")
-                            if len(lava_scores) > 0:
-                                print(f"3. Type of first element: {type(lava_scores[0])}")
-                                print(f"4. First element value: {lava_scores[0]}")
-                            else:
-                                print("3. The list is empty.")
-                        else:
-                            # Likely a Tensor or Numpy array
-                            if hasattr(lava_scores, 'shape'):
-                                print(f"2. Shape: {lava_scores.shape}")
-                            if hasattr(lava_scores, 'dtype'):
-                                print(f"3. Dtype: {lava_scores.dtype}")
-                            if hasattr(lava_scores, 'device'):
-                                print(f"4. Device: {lava_scores.device}")
-                            
-                            # Check for NaN or Inf if possible
-                            try:
-                                if hasattr(lava_scores, 'isnan'): # PyTorch
-                                    print(f"5. Contains NaNs: {lava_scores.isnan().any()}")
-                                elif hasattr(lava_scores, 'sum'): # NumPy
-                                    import numpy as np
-                                    print(f"5. Contains NaNs: {np.isnan(lava_scores).any()}")
-                            except Exception as e:
-                                print(f"5. Could not check for NaNs: {e}")
-
-                        print("="*30 + "\n")
-                        # --- DEBUG END ---
-                        # Sort indices: High Score -> Low Score
-                        # argsort gives indices of sorted elements. 
-                        # [::-1] reverses it to be Descending (Best to Worst)
+                        # --- STANDARDIZATION START ---
                         # 1. Handle GPU Tensors (Move to CPU)
                         if torch.is_tensor(lava_scores):
                             lava_scores = lava_scores.detach().cpu().numpy()
                         
-                        # 2. Handle List of Tensors/Arrays (The likely cause of your error)
+                        # 2. Handle List of Tensors (The fix for your specific error)
                         elif isinstance(lava_scores, list):
-                            # If the list contains Tensors, convert them to numpy first
+                            # Convert Tensors to Numpy if needed
                             if len(lava_scores) > 0 and torch.is_tensor(lava_scores[0]):
                                 lava_scores = [x.detach().cpu().numpy() for x in lava_scores]
                             
-                            # If it's a list of arrays (batches), flatten them into one big array
+                            # Concatenate batches into one flat array
                             try:
                                 lava_scores = np.concatenate(lava_scores).ravel()
                             except ValueError:
-                                # Fallback: if concatenation fails, force it to a flat array
-                                # This handles cases where the list structure is very messy
                                 lava_scores = np.array(lava_scores, dtype=object).flatten()
 
                         # 3. Final safety check: Ensure it is a 1D NumPy array
                         lava_scores = np.array(lava_scores)
                         if lava_scores.ndim > 1:
                             lava_scores = lava_scores.flatten()
+                        # --- STANDARDIZATION END ---
 
-                        # 4. Debug Print (To confirm it worked in the logs)
-                        print(f"DEBUG: lava_scores final shape: {lava_scores.shape}")
-
-                        # Original sorting line
+                        # C. Sort and Select (Must happen AFTER all standardization)
                         sorted_indices = np.argsort(lava_scores)[::-1]
-                        # --- END FIX ---
-                        
-                        # Keep the top N
                         current_indices = sorted_indices[:num_keep]
                         
                         logger.info(f"[LAVA] Selected {len(current_indices)} / {num_total} samples.")
