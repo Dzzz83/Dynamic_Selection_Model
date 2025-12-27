@@ -265,50 +265,71 @@ def main():
                 for epoch in range(1, args.epochs + 1):
                     t0 = time.time()
                     
-                # 1. Dynamic Selection Phase
+# 1. Dynamic Selection Phase
                 if select_ratio is not None:
                     # Update selection every 5 epochs (LAVA is slow, don't run every epoch)
                     if epoch == 1 or epoch % 5 == 0:
                         logger.info(f"[Epoch {epoch}] Updating Selection with LAVA...")
                         
-                        # A. Calculate how many samples to keep
                         num_total = len(dataset)
                         num_keep = int(num_total * select_ratio)
 
-                        # B. Switch to Clean Transform
+                        # Switch to Clean Transform
                         dataset.transform = clean_transform
                         
-                        # [LAVA] Computing Transport Cost
+                        # [LAVA] Compute Costs
                         lava_scores = run_lava_selection(model, dataset, val_dataset)
 
-                        # --- ROBUST FIX START ---
-                        # 1. Handle if lava_scores is a LIST (e.g., per-class scores)
-                        if isinstance(lava_scores, list):
-                            processed_list = []
-                            for s in lava_scores:
-                                # Ensure it's numpy
-                                if torch.is_tensor(s):
-                                    s = s.detach().cpu().numpy()
+                        # --- CORRECTED HANDLING ---
+                        # 1. If it's a list (likely [source_scores, target_scores]), find the one matching train size
+                        if isinstance(lava_scores, (list, tuple)):
+                            # Helper to convert to numpy
+                            def to_np(x):
+                                return x.detach().cpu().numpy() if torch.is_tensor(x) else np.array(x)
+
+                            candidates = [to_np(x).flatten() for x in lava_scores]
+                            
+                            # Find the array that matches the training set size
+                            matched = None
+                            for c in candidates:
+                                if c.shape[0] == num_total:
+                                    matched = c
+                                    break
+                            
+                            if matched is not None:
+                                lava_scores = matched
+                            else:
+                                # Fallback: If no exact match, maybe it's a list of batches?
+                                # Only concatenate if the sum of lengths matches, or if it looks like batches.
+                                # But for safety, if we have 2 items and neither matches, take the first one (source).
+                                if len(candidates) == 2:
+                                    logger.warning(f"LAVA returned 2 arrays {candidates[0].shape}, {candidates[1].shape} but neither matched {num_total}. Using index 0.")
+                                    lava_scores = candidates[0]
                                 else:
-                                    s = np.array(s)
-                                
-                                # Flatten to 1D immediately (Fixes the (1, N) vs (1, M) mismatch)
-                                processed_list.append(s.flatten())
-                            
-                            # Now safe to concatenate 1D arrays of different lengths
-                            lava_scores = np.concatenate(processed_list)
-                        
-                        # 2. Handle if lava_scores is a single Tensor
-                        elif torch.is_tensor(lava_scores):
-                            lava_scores = lava_scores.detach().cpu().numpy().flatten()
-                            
-                        # 3. Handle if lava_scores is already a single Numpy array
-                        else:
-                            lava_scores = np.array(lava_scores).flatten()
-                        # --- ROBUST FIX END ---
+                                    lava_scores = np.concatenate(candidates)
+
+                        # 2. Ensure Flat Numpy
+                        if torch.is_tensor(lava_scores):
+                            lava_scores = lava_scores.detach().cpu().numpy()
+                        lava_scores = np.array(lava_scores).flatten()
+
+                        # 3. Final Sanity Check to prevent IndexError
+                        if len(lava_scores) != num_total:
+                            logger.warning(f"Shape Mismatch! Dataset: {num_total}, Scores: {len(lava_scores)}. Truncating/Padding...")
+                            if len(lava_scores) > num_total:
+                                lava_scores = lava_scores[:num_total]
+                            else:
+                                # Pad with -inf so they aren't selected
+                                padding = np.full(num_total - len(lava_scores), -np.inf)
+                                lava_scores = np.concatenate([lava_scores, padding])
+                        # --- END CORRECTED HANDLING ---
 
                         # C. Sort and Select
                         sorted_indices = np.argsort(lava_scores)[::-1]
+                        
+                        # Sanity check: Ensure no index exceeds dataset bounds
+                        sorted_indices = sorted_indices[sorted_indices < num_total]
+                        
                         current_indices = sorted_indices[:num_keep]
                         
                         logger.info(f"[LAVA] Selected {len(current_indices)} / {num_total} samples.")
