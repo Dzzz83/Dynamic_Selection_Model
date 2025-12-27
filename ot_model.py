@@ -275,36 +275,39 @@ def main():
                         num_total = len(dataset)
                         num_keep = int(num_total * select_ratio)
 
-                        # B. Switch to Clean Transform (Standard for evaluation/feature extraction)
+                        # B. Switch to Clean Transform
                         dataset.transform = clean_transform
                         
                         # [LAVA] Computing Transport Cost
                         lava_scores = run_lava_selection(model, dataset, val_dataset)
 
-                        # --- STANDARDIZATION START ---
-                        # 1. Handle GPU Tensors (Move to CPU)
-                        if torch.is_tensor(lava_scores):
-                            lava_scores = lava_scores.detach().cpu().numpy()
-                        
-                        # 2. Handle List of Tensors (The fix for your specific error)
-                        elif isinstance(lava_scores, list):
-                            # Convert Tensors to Numpy if needed
-                            if len(lava_scores) > 0 and torch.is_tensor(lava_scores[0]):
-                                lava_scores = [x.detach().cpu().numpy() for x in lava_scores]
+                        # --- ROBUST FIX START ---
+                        # 1. Handle if lava_scores is a LIST (e.g., per-class scores)
+                        if isinstance(lava_scores, list):
+                            processed_list = []
+                            for s in lava_scores:
+                                # Ensure it's numpy
+                                if torch.is_tensor(s):
+                                    s = s.detach().cpu().numpy()
+                                else:
+                                    s = np.array(s)
+                                
+                                # Flatten to 1D immediately (Fixes the (1, N) vs (1, M) mismatch)
+                                processed_list.append(s.flatten())
                             
-                            # Concatenate batches into one flat array
-                            try:
-                                lava_scores = np.concatenate(lava_scores).ravel()
-                            except ValueError:
-                                lava_scores = np.array(lava_scores, dtype=object).flatten()
+                            # Now safe to concatenate 1D arrays of different lengths
+                            lava_scores = np.concatenate(processed_list)
+                        
+                        # 2. Handle if lava_scores is a single Tensor
+                        elif torch.is_tensor(lava_scores):
+                            lava_scores = lava_scores.detach().cpu().numpy().flatten()
+                            
+                        # 3. Handle if lava_scores is already a single Numpy array
+                        else:
+                            lava_scores = np.array(lava_scores).flatten()
+                        # --- ROBUST FIX END ---
 
-                        # 3. Final safety check: Ensure it is a 1D NumPy array
-                        lava_scores = np.array(lava_scores)
-                        if lava_scores.ndim > 1:
-                            lava_scores = lava_scores.flatten()
-                        # --- STANDARDIZATION END ---
-
-                        # C. Sort and Select (Must happen AFTER all standardization)
+                        # C. Sort and Select
                         sorted_indices = np.argsort(lava_scores)[::-1]
                         current_indices = sorted_indices[:num_keep]
                         
@@ -313,7 +316,7 @@ def main():
                         # D. Switch back to Train Transform
                         dataset.transform = train_transform
 
-                        # Update Train Loader with the new LAVA indices
+                        # Update Train Loader
                         train_loader, _ = create_dataloader(
                             train_dataset=dataset, val_dataset=val_dataset,
                             batch_size=args.batch_size, num_workers=args.num_workers,
