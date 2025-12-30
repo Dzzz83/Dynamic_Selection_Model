@@ -17,6 +17,9 @@ from _consistency import ConsistencyCalculator
 from selection import select_samples, get_class_adaptive_ratios, get_targets_safe
 from _imbalance_cifar import IMBALANCECIFAR10, IMBALANCECIFAR100
 from _augmentation import get_Trival_Augmentation, get_week_augmentation
+from _cifar10 import cifar10_dataset
+from _cifar100 import cifar100_dataset
+
 
 
 # Modified Resnet 18
@@ -73,7 +76,6 @@ def train_one_epoch(model, loader, optimizer, device, criterion, scaler):
     correct = 0
     total = 0
     
-    # CLEAN: Use *rest to ignore indices if they exist
     for inputs, targets, *rest in loader:
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
@@ -142,7 +144,6 @@ def main():
     parser.add_argument("--num-workers", type=int, default=16) 
     parser.add_argument("--lr", type=float, default=0.001) 
     parser.add_argument("--device", default="cuda:1")
-    # ==========================
     
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--augmentation", type=str, default=None)
@@ -151,7 +152,6 @@ def main():
     args = parser.parse_args()
 
 
-    
     datasets = ["cifar10","cifar100","imbalance_cifar10","imbalance_cifar100"] 
     augmentations = ["trivial", "weak"] 
     select_ratios = [None, 0.7, 0.8, 0.9]
@@ -173,7 +173,11 @@ def main():
                 args.augmentation = augmentation
                 args.ratio = select_ratio
                 
-                ratio_str = f"r{select_ratio}" if select_ratio is not None else "Baseline"
+                if select_ratio is not None:
+                    ratio_str = f"r{select_ratio}"
+                else:
+                    ratio_str = "Baseline"
+
                 exp_name = f"train_{dataset_name}_{augmentation}_{ratio_str}"
                 
                 potential_log = f"results/{exp_name}.log"
@@ -195,7 +199,6 @@ def main():
                     train_transform, _ = get_week_augmentation()
 
                 if dataset_name == "cifar10":
-                    from _cifar10 import cifar10_dataset
                     dataset = cifar10_dataset(root=args.data_dir, train=True, download=True, transform=clean_transform)
                     val_dataset = cifar10_dataset(root=args.data_dir, train=False, download=True, transform=clean_transform)
                     num_classes = 10
@@ -203,6 +206,11 @@ def main():
                     dataset = IMBALANCECIFAR10(root=args.data_dir, train=True, download=True, transform=clean_transform)
                     val_dataset = IMBALANCECIFAR10(root=args.data_dir, train=False, download=True, transform=clean_transform)
                     num_classes = 10
+
+                elif dataset_name == "cifar100":
+                    dataset = cifar100_dataset(root=args.data_dir, train=True, download=True, transform=clean_transform)
+                    val_dataset = cifar100_dataset(root=args.data_dir, train=False, download=True, transform=clean_transform)
+                    num_classes = 100
 
                 elif dataset_name == "imbalance_cifar100":
                     dataset = IMBALANCECIFAR100(root=args.data_dir, train=True, download=True, transform=clean_transform)
